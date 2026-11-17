@@ -72,3 +72,17 @@ Capturas: capturas/P2_CP4_compilacion_isr_time.png y capturas/P2_CP4_ejecucion_i
 ISR_TIME.ASM lee dentro del ISR la palabra baja del contador de ticks del BIOS en la dirección 0040h:006Ch, que el timer incrementa unas 18,2 veces por segundo, y le resta la lectura guardada en la interrupción anterior. En la primera prueba aparecieron los mismos dos problemas de ISR_KB.ASM, el programa terminó con solo dos teclas porque también medía los códigos de soltar y el mensaje final no se mostró por el DS que deja LDS. Por lo tanto se aplicaron los mismos ajustes, ignorar los códigos con el bit 7 en 1 enviando solo el EOI y guardar DS con PUSH y POP alrededor de la restauración.
 
 Se presionaron cinco teclas midiendo desde Windows el tiempo entre ellas. Con separaciones de 1068 ms, 2052 ms, 421 ms y 421 ms el programa reportó 19, 38, 8 y 7 ticks, y el primer valor de 20 corresponde al tiempo entre el inicio del programa y la primera tecla. Estos valores coinciden con unos 18 ticks por cada segundo transcurrido, lo que confirma que la medición es proporcional al tiempo real entre pulsaciones.
+
+## Decisión Técnica — En qué punto del ISR debe ir el EOI
+Si el EOI se envía después de imprimir, como en ISR_KB.ASM, el PIC 8259A sigue tomando a IRQ1 como en servicio durante toda la impresión con INT 21h y no despacha las IRQ de igual o menor prioridad que lleguen en ese lapso, por ejemplo la del LPT1. Esas interrupciones esperan y su latencia crece.
+
+Enviar el EOI temprano no evita que IRQ1 vuelva a entrar al ISR, porque el ISR no ejecuta STI y la CPU mantiene IF en 0 hasta el IRET. Despachar otras IRQ pendientes depende del PIC y del EOI, mientras que la reentrada de la misma IRQ1 depende de la CPU y de IF. En la captura capturas/P2_CP5_evidencia_eoi.png ISR_KB e ISR_TIME atendieron las mismas cinco teclas escritas muy rápido sin perder ninguna, e ISR_TIME marcó 0 y 1 tick entre ellas, de modo que para IRQ1 la posición del EOI no cambió el resultado.
+
+ISR_TIME.ASM envía el EOI apenas termina el trabajo con el hardware, que es leer el puerto 60h y el contador de ticks, y deja la impresión para después. Se recomienda este orden porque libera al PIC lo antes posible y reduce la latencia de las demás interrupciones.
+
+## Decisión Técnica — Polling o interrupción para el mismo dispositivo
+El polling de TECL.ASM no sirve para un programa que deba seguir trabajando mientras espera, como un juego que anima la pantalla o un programa que atiende otro periférico, porque el bucle .poll ocupa toda la CPU. En la captura capturas/P2_CP5_evidencia_polling.png TECL no hizo nada más hasta recibir la tecla A, mientras que con ISR_CHAIN el programa principal siguió leyendo y mostrando las letras y el ISR las contó aparte.
+
+El ISR responde con menor latencia porque el hardware activa la línea IRQ1 y la CPU salta al ISR en cuanto termina la instrucción actual. El polling, en cambio, solo detecta la tecla cuando la CPU vuelve a ejecutar la lectura del puerto 64h. Esto se notó en el Checkpoint 1 de la Parte 1, donde el handler del BIOS leyó el puerto 60h antes que el bucle de TECL.
+
+Para un dispositivo esporádico como el teclado, mantener la CPU en un bucle de espera activa durante minutos desperdicia ciclos que la interrupción evita, ya que la CPU solo atiende el teclado cuando llega una tecla. Por eso el polling se reserva para esperas muy cortas, donde instalar y restaurar un ISR no se justifica.
