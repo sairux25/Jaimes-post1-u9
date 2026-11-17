@@ -31,7 +31,7 @@ Capturas: capturas/CP4_compilacion_multi_st.png y capturas/CP4_ejecucion_multi_s
 MULTI_ST.ASM lee en cada vuelta el bit OBF del puerto 64h y lo guarda en BL, luego lee el bit 7 del puerto 379h, lo normaliza a 0 o 1 y lo guarda en BH. Al combinar BL y BH con OR el bucle solo se repite cuando ninguno de los dos dispositivos está listo, y al salir se revisa cada registro por separado para saber cuál mensaje imprimir. En la primera compilación apareció la misma advertencia de LPT1P en la lectura del puerto 379h, por lo tanto se ajustó cargando el puerto en DX y usando IN AL, DX. Hecho esto, MULTI_ST.COM compiló sin advertencias y al ejecutarlo sin presionar ninguna tecla mostró solo "LPT1 listo (BUSY#=1).", lo que confirma que el programa identificó al puerto paralelo como el que hizo salir el bucle.
 
 ## Decisión Técnica — Polling sin límite o polling con timeout configurable
-El bucle sin límite de TECL.ASM es aceptable solo cuando el dispositivo está garantizado a responder, como en esta práctica donde la misma estudiante presiona la tecla para ver el scancode. En cambio, el timeout de POLL_T.ASM es preferible cuando el programa no puede asumir que el dispositivo va a responder, porque así el programa no queda bloqueado para siempre.
+El bucle sin límite de TECL.ASM es aceptable solo cuando el dispositivo está garantizado a responder. En cambio, el timeout de POLL_T.ASM es preferible cuando el programa no puede asumir que el dispositivo va a responder, porque así el programa no queda bloqueado para siempre.
 
 Reducir MAX_RETRY a 5h es un riesgo porque produce falsos timeouts sobre dispositivos lentos pero funcionales. En la captura capturas/CP5_evidencia_timeout.png se presionó la tecla A justo después de lanzar POLL_T y aun así apareció el mensaje de timeout, mientras la letra llegó después al prompt, de modo que el teclado sí respondió pero tarde.
 
@@ -43,3 +43,18 @@ El bucle .poll de MULTI_ST.ASM sí se detiene en la primera iteración sin impor
 Es necesario volver a examinar BL y BH por separado porque el OR junta las dos banderas en un solo valor y descarta cuál de ellas lo puso en 1. Saber que alguno está listo no basta, ya que el programa debe decidir si atiende el teclado, la impresora o los dos.
 
 Con AND el programa esperaría a que ambas condiciones se cumplan al mismo tiempo, que haya una tecla presionada y que la impresora esté lista. Esto tiene sentido en una sincronización tipo rendezvous, como no enviar un dato a la impresora hasta que el usuario haya presionado una tecla y el periférico esté disponible. En cambio, OR solo necesita que ocurra el primero de los dos eventos.
+
+# PARTE 2 — ISR Personalizado y Programación del PIC 8259A
+## Checkpoint 1 — ISR propio para IRQ1
+Capturas: capturas/P2_CP1_compilacion_isr_kb.png y capturas/P2_CP1_ejecucion_isr_kb.png
+
+Los programas de esta parte se trabajaron en C:\U9P2. ISR_KB.ASM guarda el vector original de INT 09h con INT 21h AH=35h, que lo devuelve en ES:BX, e instala su propio ISR con AH=25h pasando la dirección en DS:DX. Cada vez que se dispara el IRQ1 el ISR lee el puerto 60h, muestra el mensaje, suma al contador y envía el EOI al puerto 20h, y cuando el contador llega a 5 el programa restaura el vector original otra vez con AH=25h.
+
+En la primera prueba salió un mensaje apenas se lanzó el programa y cada tecla sumaba dos, además al final la pantalla se desplazó hasta quedar vacía sin mostrar el mensaje de restauración. Esto pasó porque el IRQ1 se dispara al presionar y al soltar cada tecla, y porque LDS dejó DS apuntando al segmento del handler original cuando se imprimió msg_fin. Por lo tanto se ajustó ignorando dentro del ISR los códigos con el bit 7 en 1 y guardando DS con PUSH y POP alrededor de la restauración. Hecho esto, al presionar cinco teclas el programa mostró el mensaje exactamente cinco veces y terminó con "ISR restaurado. Fin del programa.".
+
+## Checkpoint 2 — Enmascaramiento con el IMR
+Capturas: capturas/P2_CP2_compilacion_mask_kb.png, capturas/P2_CP2_enmascarado_mask_kb.png y capturas/P2_CP2_restaurado_mask_kb.png
+
+MASK_KB.ASM lee el IMR del PIC maestro en el puerto 21h, guarda su valor y le pone en 1 el bit 1 con OR 02h, lo que deshabilita el IRQ1 del teclado. Luego espera 55 ticks, unos 3 segundos, consultando el timer con INT 1Ah, y al final devuelve el IMR a su valor original. En la primera prueba el programa se quedó colgado sin mostrar nada, porque los mensajes estaban al inicio y la CPU los ejecutaba como instrucciones desde la dirección 100h. Por lo tanto se movieron los mensajes al final del programa.
+
+Hecho esto, se presionaron las teclas a, b y c mientras se veía el mensaje de IRQ1 enmascarado y ninguna apareció en pantalla. Al restaurar el IMR el programa mostró "IRQ1 restaurado." y las tres letras aparecieron después en el prompt, lo que confirma que el teclado quedó silenciado solo mientras el IRQ1 estuvo enmascarado.
